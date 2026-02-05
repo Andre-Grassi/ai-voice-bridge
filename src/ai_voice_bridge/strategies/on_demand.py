@@ -44,14 +44,11 @@ class OnDemandStrategy(SessionStrategy):
             raise
 
     async def on_stop_talking(self) -> None:
-        """Sinaliza fim de turno e marca para fechar após resposta."""
+        """Marca para fechar após resposta do Gemini (VAD automático)."""
         if not self._is_active:
             return
 
-        logger.info("[on-demand] Sinalizando fim de turno ao Gemini...")
-        await self._gemini.end_turn()
-
-        logger.info("[on-demand] Aguardando resposta do Gemini antes de fechar...")
+        logger.info("[on-demand] Aguardando resposta do Gemini (VAD automático)...")
         self._pending_close = True
         # NÃO fecha aqui - aguarda turn_complete em receive_responses()
 

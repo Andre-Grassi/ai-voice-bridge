@@ -51,6 +51,7 @@ class GeminiClient:
             return
 
         try:
+            logger.debug("[gemini] Enviando %d bytes de áudio", len(pcm_chunk))
             await self._session.send_realtime_input(
                 audio={
                     "data": pcm_chunk,
@@ -60,18 +61,6 @@ class GeminiClient:
         except Exception as e:
             logger.warning("[gemini] Erro ao enviar áudio: %s", e)
             self._is_connected = False
-
-    async def end_turn(self) -> None:
-        """Sinaliza ao Gemini que o usuário terminou de falar."""
-        if not self.is_connected or self._session is None:
-            return
-
-        try:
-            # Envia sinal de fim de turno usando send_client_content
-            await self._session.send_client_content(turns=None, turn_complete=True)
-            logger.info("[gemini] Fim de turno sinalizado")
-        except Exception as e:
-            logger.warning("[gemini] Erro ao sinalizar fim de turno: %s", e)
 
     async def receive_messages(self) -> AsyncIterator[dict]:
         """Gera mensagens recebidas do Gemini."""
