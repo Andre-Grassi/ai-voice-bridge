@@ -4,39 +4,40 @@ import asyncio
 import base64
 import logging
 
-from ai_voice_bridge.config import settings, ConnectionMode
-from ai_voice_bridge.websocket_server import WebSocketServer
+from ai_voice_bridge.config import settings
 from ai_voice_bridge.gemini_client import GeminiClient
 from ai_voice_bridge.strategies.base import SessionStrategy
 from ai_voice_bridge.strategies.on_demand import OnDemandStrategy
 from ai_voice_bridge.strategies.always_on import AlwaysOnStrategy
+from ai_voice_bridge.websocket_server import WebSocketServer
 
 logger = logging.getLogger(__name__)
 
 
 class VoiceBridge:
-    """Coordenador principal do AI Voice Bridge."""
+    """Coordena WebSocket server, estratégia e cliente Gemini."""
 
     def __init__(self) -> None:
-        self._ws = WebSocketServer()
         self._gemini = GeminiClient()
+        self._ws = WebSocketServer()
         self._strategy = self._create_strategy()
         self._response_task: asyncio.Task | None = None
 
     def _create_strategy(self) -> SessionStrategy:
         """Cria estratégia baseada na configuração."""
-        if settings.connection_mode == ConnectionMode.ON_DEMAND:
-            logger.info("[bridge] Usando estratégia On-Demand")
-            return OnDemandStrategy(self._gemini)
-        else:
+        mode = settings.connection_mode.upper()
+        if mode == "ALWAYS_ON":
             logger.info("[bridge] Usando estratégia Always-On")
             return AlwaysOnStrategy(self._gemini)
+        else:
+            logger.info("[bridge] Usando estratégia On-Demand")
+            return OnDemandStrategy(self._gemini)
 
     async def run(self) -> None:
         """Inicia o bridge."""
         logger.info("[bridge] Iniciando AI Voice Bridge...")
 
-        # Inicia servidor WebSocket
+        # Inicia WebSocket server
         await self._ws.start(
             on_start_talking=self._handle_start,
             on_stop_talking=self._handle_stop,
@@ -47,9 +48,6 @@ class VoiceBridge:
         await self._strategy.initialize()
         await self._ws.send_ready()
 
-        # Inicia processamento de respostas
-        self._response_task = asyncio.create_task(self._process_responses())
-
         logger.info("[bridge] AI Voice Bridge pronto!")
 
     async def _handle_start(self) -> None:
@@ -57,6 +55,12 @@ class VoiceBridge:
         logger.debug("[bridge] start_talking recebido")
         try:
             await self._strategy.on_start_talking()
+
+            # Inicia task de processamento de respostas para esta sessão
+            if self._response_task:
+                self._response_task.cancel()
+            self._response_task = asyncio.create_task(self._process_responses())
+
         except Exception as e:
             logger.error("[bridge] Erro ao iniciar: %s", e)
             await self._ws.send_error(f"Falha ao conectar: {e}")
@@ -124,18 +128,20 @@ class VoiceBridge:
         return None
 
     def _is_turn_complete(self, msg: dict) -> bool:
-        """Verifica se o turno foi concluído."""
+        """Verifica se a resposta marca fim de turno."""
         return msg.get("serverContent", {}).get("turnComplete", False)
 
     async def shutdown(self) -> None:
-        """Encerra o bridge."""
+        """Encerra o bridge graciosamente."""
         logger.info("[bridge] Encerrando...")
+
         if self._response_task:
             self._response_task.cancel()
             try:
                 await self._response_task
             except asyncio.CancelledError:
                 pass
+
         await self._strategy.shutdown()
         await self._ws.stop()
-        logger.info("[bridge] AI Voice Bridge encerrado")
+        logger.info("[bridge] Encerrado.")

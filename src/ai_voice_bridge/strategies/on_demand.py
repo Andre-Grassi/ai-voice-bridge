@@ -14,12 +14,14 @@ class OnDemandStrategy(SessionStrategy):
     """Estratégia 'Walkie-Talkie': conecta/desconecta por interação.
 
     Mantém histórico local e injeta no system_instruction a cada reconexão.
+    A conexão é fechada APÓS receber a resposta completa do Gemini (turn_complete).
     """
 
     def __init__(self, gemini: GeminiClient) -> None:
         super().__init__(gemini)
         self._history: list[dict[str, str]] = []
         self._is_active = False
+        self._pending_close = False  # Marca que deve fechar após turn_complete
 
     async def initialize(self) -> None:
         """Inicializa a estratégia (aguarda start_talking)."""
@@ -34,6 +36,7 @@ class OnDemandStrategy(SessionStrategy):
         try:
             await self._gemini.connect(self._build_context_prompt())
             self._is_active = True
+            self._pending_close = False
             logger.info("[on-demand] Sessão ativa, pronta para áudio")
         except Exception as e:
             logger.error("[on-demand] Erro ao conectar ao Gemini: %s", e)
@@ -41,13 +44,16 @@ class OnDemandStrategy(SessionStrategy):
             raise
 
     async def on_stop_talking(self) -> None:
-        """Encerra a sessão Gemini."""
+        """Sinaliza fim de turno e marca para fechar após resposta."""
         if not self._is_active:
             return
 
-        logger.info("[on-demand] Encerrando sessão...")
-        await self._gemini.close()
-        self._is_active = False
+        logger.info("[on-demand] Sinalizando fim de turno ao Gemini...")
+        await self._gemini.end_turn()
+
+        logger.info("[on-demand] Aguardando resposta do Gemini antes de fechar...")
+        self._pending_close = True
+        # NÃO fecha aqui - aguarda turn_complete em receive_responses()
 
     async def send_audio(self, pcm_chunk: bytes) -> None:
         """Envia áudio para Gemini se sessão estiver ativa."""
@@ -63,7 +69,16 @@ class OnDemandStrategy(SessionStrategy):
             # Salva texto no histórico
             if text := self._extract_text(msg):
                 self._history.append({"role": "assistant", "content": text})
+
             yield msg
+
+            # Fecha conexão após turn_complete se pendente
+            if self._pending_close and self._is_turn_complete(msg):
+                logger.info("[on-demand] Turn completo, fechando sessão...")
+                await self._gemini.close()
+                self._is_active = False
+                self._pending_close = False
+                return
 
     async def shutdown(self) -> None:
         """Encerra a estratégia."""
@@ -102,3 +117,7 @@ class OnDemandStrategy(SessionStrategy):
         except Exception:
             pass
         return None
+
+    def _is_turn_complete(self, msg: dict) -> bool:
+        """Verifica se a resposta marca fim do turno."""
+        return msg.get("serverContent", {}).get("turnComplete", False)
