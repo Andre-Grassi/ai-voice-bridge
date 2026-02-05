@@ -102,7 +102,12 @@ class VoiceBridge:
                 if inline := part.get("inlineData"):
                     mime = inline.get("mimeType", "")
                     if "audio" in mime:
-                        return base64.b64decode(inline["data"])
+                        data = inline["data"]
+                        # SDK retorna bytes direto, WebSocket raw retornava base64
+                        if isinstance(data, bytes):
+                            return data
+                        else:
+                            return base64.b64decode(data)
         except Exception:
             pass
         return None

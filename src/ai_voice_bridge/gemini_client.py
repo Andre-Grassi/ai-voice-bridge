@@ -1,12 +1,10 @@
-"""Cliente WebSocket para Gemini Live API."""
+"""Cliente para Gemini Live API usando o SDK oficial google-genai."""
 
-import base64
-import json
 import logging
 from typing import AsyncIterator
 
-from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import ConnectionClosed
+from google import genai
+from google.genai import types
 
 from ai_voice_bridge.config import settings
 
@@ -14,106 +12,113 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiClient:
-    """Cliente WebSocket para Gemini Live API (streaming bidirecional)."""
+    """Cliente para Gemini Live API (streaming bidirecional de áudio)."""
 
     def __init__(self) -> None:
-        self._ws = None
+        self._client = genai.Client(api_key=settings.google_api_key)
+        self._session = None
+        self._context_manager = None
         self._is_connected = False
 
     @property
     def is_connected(self) -> bool:
         """Retorna True se conectado ao Gemini."""
-        return self._is_connected and self._ws is not None
+        return self._is_connected and self._session is not None
 
     async def connect(self, system_prompt: str) -> None:
-        """Estabelece conexão WebSocket com Gemini Live."""
-        uri = (
-            f"wss://generativelanguage.googleapis.com/ws/"
-            f"google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-            f"?key={settings.google_api_key}"
-        )
+        """Estabelece conexão com Gemini Live API."""
+        logger.info("[gemini] Conectando via SDK...")
 
-        logger.info("[gemini] Conectando...")
-        self._ws = await ws_connect(uri, max_size=None)
-
-        await self._send_setup(system_prompt)
-
-        # Aguarda confirmação de setup
-        response = await self._ws.recv()
-        data = json.loads(response)
-
-        if "setupComplete" in data:
-            self._is_connected = True
-            logger.info("[gemini] Conexão estabelecida, setup completo")
-        else:
-            raise RuntimeError(f"[gemini] Setup falhou: {data}")
-
-    async def _send_setup(self, system_prompt: str) -> None:
-        """Envia configuração inicial para Gemini."""
-        setup_msg = {
-            "setup": {
-                "model": f"models/{settings.gemini_model}",
-                "generationConfig": {
-                    "responseModalities": ["AUDIO", "TEXT"],
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {"voiceName": settings.gemini_voice}
-                        }
-                    },
-                },
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-            }
+        # Configuração simplificada baseada na documentação oficial
+        config = {
+            "response_modalities": ["AUDIO"],
+            "system_instruction": system_prompt,
         }
-        await self._ws.send(json.dumps(setup_msg))
-        logger.debug("[gemini] Setup enviado")
+
+        # Live API retorna um async context manager
+        self._context_manager = self._client.aio.live.connect(
+            model=settings.gemini_model,
+            config=config,
+        )
+        # Entra no context manager manualmente
+        self._session = await self._context_manager.__aenter__()
+        self._is_connected = True
+        logger.info("[gemini] Conexão estabelecida via SDK")
 
     async def send_audio(self, pcm_chunk: bytes) -> None:
         """Envia chunk de áudio PCM para Gemini."""
-        if not self.is_connected:
+        if not self.is_connected or self._session is None:
             return
 
-        msg = {
-            "realtimeInput": {
-                "mediaChunks": [
-                    {
-                        "mimeType": f"audio/pcm;rate={settings.input_sample_rate}",
-                        "data": base64.b64encode(pcm_chunk).decode(),
-                    }
-                ]
-            }
-        }
-
         try:
-            await self._ws.send(json.dumps(msg))
+            await self._session.send_realtime_input(
+                audio={
+                    "data": pcm_chunk,
+                    "mime_type": "audio/pcm",
+                }
+            )
         except Exception as e:
             logger.warning("[gemini] Erro ao enviar áudio: %s", e)
             self._is_connected = False
 
     async def receive_messages(self) -> AsyncIterator[dict]:
         """Gera mensagens recebidas do Gemini."""
-        if not self._ws:
+        if not self._session:
             return
 
         try:
-            async for msg in self._ws:
-                try:
-                    yield json.loads(msg)
-                except json.JSONDecodeError:
-                    continue
-        except ConnectionClosed as e:
-            logger.info("[gemini] Conexão fechada (code=%s)", e.code)
-            self._is_connected = False
+            turn = self._session.receive()
+            async for response in turn:
+                # Converte a resposta do SDK para dict no formato esperado
+                yield self._convert_response(response)
         except Exception as e:
             logger.error("[gemini] Erro ao receber: %s", e)
             self._is_connected = False
 
+    def _convert_response(self, response) -> dict:
+        """Converte resposta do SDK para o formato dict esperado pelo bridge."""
+        result = {}
+
+        if hasattr(response, "server_content") and response.server_content:
+            server_content = {
+                "turnComplete": getattr(response.server_content, "turn_complete", False)
+            }
+
+            if (
+                hasattr(response.server_content, "model_turn")
+                and response.server_content.model_turn
+            ):
+                parts = []
+                for part in response.server_content.model_turn.parts:
+                    if hasattr(part, "text") and part.text:
+                        parts.append({"text": part.text})
+                    elif hasattr(part, "inline_data") and part.inline_data:
+                        # Áudio binário
+                        parts.append(
+                            {
+                                "inlineData": {
+                                    "mimeType": getattr(
+                                        part.inline_data, "mime_type", "audio/pcm"
+                                    ),
+                                    "data": part.inline_data.data,  # já é bytes
+                                }
+                            }
+                        )
+                if parts:
+                    server_content["modelTurn"] = {"parts": parts}
+
+            result["serverContent"] = server_content
+
+        return result
+
     async def close(self) -> None:
-        """Fecha a conexão WebSocket."""
+        """Fecha a conexão."""
         self._is_connected = False
-        if self._ws:
+        if self._context_manager and self._session:
             try:
-                await self._ws.close()
+                await self._context_manager.__aexit__(None, None, None)
             except Exception:
                 pass
-            self._ws = None
-            logger.info("[gemini] Conexão fechada")
+        self._session = None
+        self._context_manager = None
+        logger.info("[gemini] Conexão fechada")

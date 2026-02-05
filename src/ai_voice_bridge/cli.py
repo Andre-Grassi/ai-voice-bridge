@@ -7,10 +7,30 @@ import sys
 
 from ai_voice_bridge.bridge import VoiceBridge
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+
+class ColoredFormatter(logging.Formatter):
+    """Formatter com cores ANSI para diferentes loggers."""
+
+    # Códigos de cor ANSI
+    BLUE = "\033[34m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Logs do gemini em azul
+        if "gemini" in record.name:
+            record.msg = f"{self.BLUE}{record.msg}{self.RESET}"
+        return super().format(record)
+
+
+# Configura logging com cores
+handler = logging.StreamHandler()
+handler.setFormatter(
+    ColoredFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 )
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
 
 

@@ -1,10 +1,11 @@
 [project]
 name = "ai-voice-bridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Modular Realtime Voice Bridge for Gemini Live API"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "google_genai>=1.62.0",
     "python-dotenv>=1.0.1",
     "websockets>=15.0",
     "pydantic-settings>=2.10.1",
