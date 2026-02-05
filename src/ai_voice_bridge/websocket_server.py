@@ -52,7 +52,9 @@ class WebSocketServer:
         logger.info("[ws-server] Cliente conectado: %s", client_addr)
 
         try:
+            # Envia connected e ready imediatamente para o novo cliente
             await websocket.send(json.dumps({"type": "connected"}))
+            await websocket.send(json.dumps({"type": "ready"}))
 
             async for message in websocket:
                 await self._process_message(message)
