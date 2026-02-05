@@ -31,9 +31,14 @@ class OnDemandStrategy(SessionStrategy):
             return
 
         logger.info("[on-demand] Iniciando sessão Gemini...")
-        await self._gemini.connect(self._build_context_prompt())
-        self._is_active = True
-        logger.info("[on-demand] Sessão ativa, pronta para áudio")
+        try:
+            await self._gemini.connect(self._build_context_prompt())
+            self._is_active = True
+            logger.info("[on-demand] Sessão ativa, pronta para áudio")
+        except Exception as e:
+            logger.error("[on-demand] Erro ao conectar ao Gemini: %s", e)
+            self._is_active = False
+            raise
 
     async def on_stop_talking(self) -> None:
         """Encerra a sessão Gemini."""

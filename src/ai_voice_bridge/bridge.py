@@ -55,7 +55,11 @@ class VoiceBridge:
     async def _handle_start(self) -> None:
         """Handler para start_talking."""
         logger.debug("[bridge] start_talking recebido")
-        await self._strategy.on_start_talking()
+        try:
+            await self._strategy.on_start_talking()
+        except Exception as e:
+            logger.error("[bridge] Erro ao iniciar: %s", e)
+            await self._ws.send_error(f"Falha ao conectar: {e}")
 
     async def _handle_stop(self) -> None:
         """Handler para stop_talking."""
