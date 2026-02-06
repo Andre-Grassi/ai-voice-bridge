@@ -4,6 +4,9 @@ import asyncio
 import base64
 import logging
 
+import numpy as np
+import sounddevice as sd
+
 from ai_voice_bridge.config import settings
 from ai_voice_bridge.gemini_client import GeminiClient
 from ai_voice_bridge.strategies.base import SessionStrategy
@@ -12,6 +15,9 @@ from ai_voice_bridge.strategies.always_on import AlwaysOnStrategy
 from ai_voice_bridge.websocket_server import WebSocketServer
 
 logger = logging.getLogger(__name__)
+
+# Sample rate do áudio de saída do Gemini
+_AUDIO_SAMPLE_RATE = 24000
 
 
 class VoiceBridge:
@@ -22,6 +28,7 @@ class VoiceBridge:
         self._ws = WebSocketServer()
         self._strategy = self._create_strategy()
         self._response_task: asyncio.Task | None = None
+        self._audio_buffer: list[bytes] = []  # Buffer para debug de áudio local
 
     def _create_strategy(self) -> SessionStrategy:
         """Cria estratégia baseada na configuração."""
@@ -76,12 +83,18 @@ class VoiceBridge:
 
     async def _process_responses(self) -> None:
         """Processa respostas do Gemini e envia para clientes."""
+        self._audio_buffer = []  # Limpa buffer no início de cada turno
+
         try:
             async for msg in self._strategy.receive_responses():
                 # Processa áudio
                 if audio_data := self._extract_audio(msg):
                     await self._ws.send_speaking(True)
                     await self._ws.send_audio(audio_data)
+
+                    # [DEBUG] Acumula áudio para reprodução local
+                    if settings.debug_play_audio_locally:
+                        self._audio_buffer.append(audio_data)
 
                 # Processa texto (legendas)
                 if text := self._extract_text(msg):
@@ -92,11 +105,45 @@ class VoiceBridge:
                     await self._ws.send_speaking(False)
                     await self._ws.send_turn_complete()
 
+                    # [DEBUG] Reproduz áudio localmente
+                    if settings.debug_play_audio_locally and self._audio_buffer:
+                        self._play_audio_locally()
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error("[bridge] Erro no processamento: %s", e)
             await self._ws.send_error(str(e))
+
+    def _play_audio_locally(self) -> None:
+        """[DEBUG] Reproduz áudio acumulado no dispositivo local."""
+        if not self._audio_buffer:
+            return
+
+        # Concatena todos os chunks
+        all_audio = b"".join(self._audio_buffer)
+        logger.info(
+            "[bridge] Reproduzindo áudio localmente: %d bytes, %d chunks",
+            len(all_audio),
+            len(self._audio_buffer),
+        )
+
+        # Converte PCM 16-bit signed para float32 normalizado
+        audio_int16 = np.frombuffer(all_audio, dtype=np.int16)
+        audio_float32 = audio_int16.astype(np.float32) / 32768.0
+
+        logger.info(
+            "[bridge] Samples: %d, Duração: %.2fs",
+            len(audio_float32),
+            len(audio_float32) / _AUDIO_SAMPLE_RATE,
+        )
+
+        # Reproduz (bloqueante, mas é para debug)
+        sd.play(audio_float32, samplerate=_AUDIO_SAMPLE_RATE)
+        sd.wait()
+
+        logger.info("[bridge] Reprodução local concluída")
+        self._audio_buffer = []
 
     def _extract_audio(self, msg: dict) -> bytes | None:
         """Extrai áudio PCM da resposta Gemini."""

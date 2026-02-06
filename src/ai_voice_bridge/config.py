@@ -41,5 +41,8 @@ class Settings(BaseSettings):
     # History (On-Demand mode)
     max_history_messages: int = 20
 
+    # Debug
+    debug_play_audio_locally: bool = False
+
 
 settings = Settings()
