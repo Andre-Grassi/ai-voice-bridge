@@ -5,7 +5,14 @@ import base64
 import logging
 
 import numpy as np
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    sd = None
+    logger.warning(
+        "[bridge] Biblioteca 'sounddevice' (ou PortAudio) não encontrada. Playback local desativado."
+    )
 
 from ai_voice_bridge.config import settings
 from ai_voice_bridge.gemini_client import GeminiClient
@@ -119,6 +126,13 @@ class VoiceBridge:
     def _play_audio_locally(self) -> None:
         """[DEBUG] Reproduz áudio acumulado no dispositivo local."""
         if not self._audio_buffer:
+            return
+
+        if sd is None:
+            logger.warning(
+                "[bridge] sounddevice não disponível. Ignorando playback local."
+            )
+            self._audio_buffer = []
             return
 
         # Concatena todos os chunks
