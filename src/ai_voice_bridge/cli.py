@@ -28,7 +28,9 @@ class ColoredFormatter(logging.Formatter):
 # Configura logging com cores
 handler = logging.StreamHandler()
 handler.setFormatter(
-    ColoredFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    ColoredFormatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%d-%m-%y %H:%M:%S"
+    )
 )
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
