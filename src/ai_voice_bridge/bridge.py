@@ -89,6 +89,7 @@ class VoiceBridge:
             async for msg in self._strategy.receive_responses():
                 # Processa áudio
                 if audio_data := self._extract_audio(msg):
+                    logger.info("[bridge] Enviando chunk: %d bytes", len(audio_data))
                     await self._ws.send_speaking(True)
                     await self._ws.send_audio(audio_data)
 

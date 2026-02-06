@@ -6,6 +6,7 @@ import signal
 import sys
 
 from ai_voice_bridge.bridge import VoiceBridge
+from ai_voice_bridge.config import settings
 
 
 class ColoredFormatter(logging.Formatter):
@@ -32,7 +33,7 @@ handler.setFormatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%d-%m-%y %H:%M:%S"
     )
 )
-logging.basicConfig(level=logging.INFO, handlers=[handler])
+logging.basicConfig(level=settings.logging_level.upper(), handlers=[handler])
 logger = logging.getLogger(__name__)
 
 

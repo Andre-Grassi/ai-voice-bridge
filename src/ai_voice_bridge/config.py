@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     # Debug
     debug_play_audio_locally: bool = False
+    logging_level: str = "INFO"
 
 
 settings = Settings()
