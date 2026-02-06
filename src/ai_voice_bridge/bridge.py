@@ -6,6 +6,8 @@ import logging
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 try:
     import sounddevice as sd
 except (ImportError, OSError):
@@ -20,8 +22,6 @@ from ai_voice_bridge.strategies.base import SessionStrategy
 from ai_voice_bridge.strategies.on_demand import OnDemandStrategy
 from ai_voice_bridge.strategies.always_on import AlwaysOnStrategy
 from ai_voice_bridge.websocket_server import WebSocketServer
-
-logger = logging.getLogger(__name__)
 
 # Sample rate do áudio de saída do Gemini
 _AUDIO_SAMPLE_RATE = 24000
