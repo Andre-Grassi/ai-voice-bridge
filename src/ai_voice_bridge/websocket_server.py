@@ -49,7 +49,11 @@ class WebSocketServer:
         """Handler para cada conexão WebSocket."""
         self._connections.add(websocket)
         client_addr = websocket.remote_address
-        logger.info("[ws-server] Cliente conectado: %s", client_addr)
+        logger.info(
+            "[ws-server] Cliente conectado: %s (total: %d)",
+            client_addr,
+            len(self._connections),
+        )
 
         try:
             # Envia connected e ready imediatamente para o novo cliente
