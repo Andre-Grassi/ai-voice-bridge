@@ -38,12 +38,25 @@ class WebSocketServer:
             self._handle_connection,
             settings.ws_host,
             settings.ws_port,
+            process_request=self._process_request,
         )
         logger.info(
             "[ws-server] Escutando em ws://%s:%s",
             settings.ws_host,
             settings.ws_port,
         )
+
+    async def _process_request(self, connection, request):
+        """Intercepta requisições HTTP (Health Checks)."""
+        if request.path == "/health":
+            logger.debug("[ws-server] Health check recebido")
+            return (
+                200,
+                [("Content-Type", "text/plain"), ("Connection", "close")],
+                b"OK",
+            )
+        # Retorna None para continuar com handshake WebSocket normal
+        return None
 
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         """Handler para cada conexão WebSocket."""
