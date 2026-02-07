@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 
 from ai_voice_bridge.bridge import VoiceBridge
@@ -44,13 +44,30 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_class=PlainTextResponse)
+@app.get("/", tags=["Health"])
+async def root() -> dict[str, str]:
+    """Retorna mensagem de boas-vindas."""
+    return {
+        "message": "AI Voice Bridge is running",
+        "version": app.version,
+        "docs": "/docs",
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """Retorna 204 No Content para evitar 404 nos logs."""
+    return Response(status_code=204)
+
+
+@app.get("/health", response_class=PlainTextResponse, tags=["Health"])
 async def health_check() -> str:
     """Endpoint de health check para o Render/K8s."""
     return "OK"
 
 
 @app.websocket("/ws")
+@app.websocket("/")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Endpoint WebSocket para comunicação com clientes."""
     # O Bridge agora gerencia a conexão pré-aceita (ou a aceita internamente)
