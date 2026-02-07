@@ -1,10 +1,10 @@
-"""Coordenador principal do AI Voice Bridge."""
-
 import asyncio
 import base64
+import json
 import logging
 
 import numpy as np
+from fastapi import WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +21,17 @@ from ai_voice_bridge.gemini_client import GeminiClient
 from ai_voice_bridge.strategies.base import SessionStrategy
 from ai_voice_bridge.strategies.on_demand import OnDemandStrategy
 from ai_voice_bridge.strategies.always_on import AlwaysOnStrategy
-from ai_voice_bridge.websocket_server import WebSocketServer
 
 # Sample rate do áudio de saída do Gemini
 _AUDIO_SAMPLE_RATE = 24000
 
 
 class VoiceBridge:
-    """Coordena WebSocket server, estratégia e cliente Gemini."""
+    """Coordena conexões WebSocket, estratégia e cliente Gemini."""
 
     def __init__(self) -> None:
         self._gemini = GeminiClient()
-        self._ws = WebSocketServer()
+        self._connections: set[WebSocket] = set()
         self._strategy = self._create_strategy()
         self._response_task: asyncio.Task | None = None
         self._audio_buffer: list[bytes] = []  # Buffer para debug de áudio local
@@ -41,79 +40,104 @@ class VoiceBridge:
         """Cria estratégia baseada na configuração."""
         mode = settings.connection_mode.upper()
         if mode == "ALWAYS_ON":
-            logger.info("[bridge] Usando estratégia Always-On")
             return AlwaysOnStrategy(self._gemini)
         else:
-            logger.info("[bridge] Usando estratégia On-Demand")
             return OnDemandStrategy(self._gemini)
 
-    async def run(self) -> None:
-        """Inicia o bridge."""
-        logger.info("[bridge] Iniciando AI Voice Bridge...")
-
-        # Inicia WebSocket server
-        await self._ws.start(
-            on_start_talking=self._handle_start,
-            on_stop_talking=self._handle_stop,
-            on_audio_chunk=self._handle_audio,
-        )
-
-        # Inicializa estratégia
+    async def initialize(self) -> None:
+        """Inicializa o bridge (estratégia e conexões)."""
+        logger.info("[bridge] Inicializando estratégia...")
         await self._strategy.initialize()
-        await self._ws.send_ready()
+        logger.info("[bridge] Bridge pronto.")
 
-        logger.info("[bridge] AI Voice Bridge pronto!")
+    async def handle_connection(self, websocket: WebSocket) -> None:
+        """Gerencia uma nova conexão WebSocket (FastAPI)."""
+        await websocket.accept()
+        self._connections.add(websocket)
+        client_addr = websocket.client
+        logger.info("[bridge] Cliente conectado: %s", client_addr)
+
+        try:
+            # Envia 'connected' e 'ready'
+            await websocket.send_text(json.dumps({"type": "connected"}))
+            await websocket.send_text(json.dumps({"type": "ready"}))
+
+            # Loop de mensagens
+            while True:
+                message = await websocket.receive()
+                if "text" in message:
+                    await self._process_message(message["text"])
+                elif "bytes" in message:
+                    await self._handle_audio(message["bytes"])
+
+        except WebSocketDisconnect:
+            logger.info("[bridge] Cliente desconectado: %s", client_addr)
+        except Exception as e:
+            logger.error("[bridge] Erro na conexão %s: %s", client_addr, e)
+        finally:
+            self._connections.discard(websocket)
+
+    async def _process_message(self, message: str) -> None:
+        """Processa mensagens de texto (JSON) do cliente."""
+        try:
+            data = json.loads(message)
+            msg_type = data.get("type")
+
+            if msg_type == "start_talking":
+                logger.debug("[bridge] start_talking recebido")
+                await self._handle_start()
+            elif msg_type == "stop_talking":
+                logger.debug("[bridge] stop_talking recebido")
+                await self._handle_stop()
+
+        except json.JSONDecodeError:
+            logger.warning("[bridge] JSON inválido recebido")
 
     async def _handle_start(self) -> None:
-        """Handler para start_talking."""
-        logger.debug("[bridge] start_talking recebido")
+        """Inicia sessão de fala."""
         try:
             await self._strategy.on_start_talking()
 
-            # Inicia task de processamento de respostas para esta sessão
+            # Reinicia task de resposta
             if self._response_task:
                 self._response_task.cancel()
             self._response_task = asyncio.create_task(self._process_responses())
 
         except Exception as e:
             logger.error("[bridge] Erro ao iniciar: %s", e)
-            await self._ws.send_error(f"Falha ao conectar: {e}")
+            await self.send_error(f"Falha ao conectar: {e}")
 
     async def _handle_stop(self) -> None:
-        """Handler para stop_talking."""
-        logger.debug("[bridge] stop_talking recebido")
+        """Para sessão de fala."""
         await self._strategy.on_stop_talking()
 
     async def _handle_audio(self, chunk: bytes) -> None:
-        """Handler para áudio recebido do cliente."""
+        """Envia áudio do cliente para o Gemini."""
         await self._strategy.send_audio(chunk)
 
     async def _process_responses(self) -> None:
         """Processa respostas do Gemini e envia para clientes."""
-        self._audio_buffer = []  # Limpa buffer no início de cada turno
+        self._audio_buffer = []
 
         try:
             async for msg in self._strategy.receive_responses():
                 # Processa áudio
                 if audio_data := self._extract_audio(msg):
-                    logger.info("[bridge] Enviando chunk: %d bytes", len(audio_data))
-                    await self._ws.send_speaking(True)
-                    await self._ws.send_audio(audio_data)
+                    await self.send_speaking(True)
+                    await self.send_audio(audio_data)
 
-                    # [DEBUG] Acumula áudio para reprodução local
                     if settings.debug_play_audio_locally:
                         self._audio_buffer.append(audio_data)
 
-                # Processa texto (legendas)
+                # Processa texto
                 if text := self._extract_text(msg):
-                    await self._ws.send_subtitle(text)
+                    await self.send_subtitle(text)
 
-                # Detecta fim de turno
+                # Fim de turno
                 if self._is_turn_complete(msg):
-                    await self._ws.send_speaking(False)
-                    await self._ws.send_turn_complete()
+                    await self.send_speaking(False)
+                    await self.send_turn_complete()
 
-                    # [DEBUG] Reproduz áudio localmente
                     if settings.debug_play_audio_locally and self._audio_buffer:
                         self._play_audio_locally()
 
@@ -121,65 +145,75 @@ class VoiceBridge:
             pass
         except Exception as e:
             logger.error("[bridge] Erro no processamento: %s", e)
-            await self._ws.send_error(str(e))
+            await self.send_error(str(e))
 
-    def _play_audio_locally(self) -> None:
-        """[DEBUG] Reproduz áudio acumulado no dispositivo local."""
-        if not self._audio_buffer:
+    # --- Métodos de Envio (Broadcast) ---
+
+    async def _broadcast_text(self, data: dict) -> None:
+        if not self._connections:
             return
-
-        if sd is None:
-            logger.warning(
-                "[bridge] sounddevice não disponível. Ignorando playback local."
-            )
-            self._audio_buffer = []
-            return
-
-        # Concatena todos os chunks
-        all_audio = b"".join(self._audio_buffer)
-        logger.info(
-            "[bridge] Reproduzindo áudio localmente: %d bytes, %d chunks",
-            len(all_audio),
-            len(self._audio_buffer),
+        msg = json.dumps(data)
+        # Envia para todos (ignora erros de envio individuais)
+        await asyncio.gather(
+            *[ws.send_text(msg) for ws in self._connections], return_exceptions=True
         )
 
-        # Converte PCM 16-bit signed para float32 normalizado
+    async def _broadcast_bytes(self, data: bytes) -> None:
+        if not self._connections:
+            return
+        await asyncio.gather(
+            *[ws.send_bytes(data) for ws in self._connections], return_exceptions=True
+        )
+
+    async def send_ready(self) -> None:
+        await self._broadcast_text({"type": "ready"})
+
+    async def send_speaking(self, is_speaking: bool) -> None:
+        await self._broadcast_text({"type": "speaking", "value": is_speaking})
+
+    async def send_subtitle(self, text: str) -> None:
+        await self._broadcast_text({"type": "subtitle", "text": text})
+
+    async def send_audio(self, pcm_data: bytes) -> None:
+        await self._broadcast_bytes(pcm_data)
+
+    async def send_turn_complete(self) -> None:
+        await self._broadcast_text({"type": "turn_complete"})
+
+    async def send_error(self, message: str) -> None:
+        await self._broadcast_text({"type": "error", "message": message})
+
+    # --- Helpers ---
+
+    def _play_audio_locally(self) -> None:
+        """[DEBUG] Reproduz áudio acumulado localmente."""
+        if not self._audio_buffer or sd is None:
+            return
+
+        all_audio = b"".join(self._audio_buffer)
         audio_int16 = np.frombuffer(all_audio, dtype=np.int16)
         audio_float32 = audio_int16.astype(np.float32) / 32768.0
 
-        logger.info(
-            "[bridge] Samples: %d, Duração: %.2fs",
-            len(audio_float32),
-            len(audio_float32) / _AUDIO_SAMPLE_RATE,
-        )
-
-        # Reproduz (bloqueante, mas é para debug)
+        logger.info("[bridge] [DEBUG] Reproduzindo áudio local...")
         sd.play(audio_float32, samplerate=_AUDIO_SAMPLE_RATE)
         sd.wait()
-
-        logger.info("[bridge] Reprodução local concluída")
         self._audio_buffer = []
 
     def _extract_audio(self, msg: dict) -> bytes | None:
-        """Extrai áudio PCM da resposta Gemini."""
         try:
             parts = msg.get("serverContent", {}).get("modelTurn", {}).get("parts", [])
             for part in parts:
                 if inline := part.get("inlineData"):
-                    mime = inline.get("mimeType", "")
-                    if "audio" in mime:
+                    if "audio" in inline.get("mimeType", ""):
                         data = inline["data"]
-                        # SDK retorna bytes direto, WebSocket raw retornava base64
-                        if isinstance(data, bytes):
-                            return data
-                        else:
-                            return base64.b64decode(data)
+                        return (
+                            data if isinstance(data, bytes) else base64.b64decode(data)
+                        )
         except Exception:
             pass
         return None
 
     def _extract_text(self, msg: dict) -> str | None:
-        """Extrai texto da resposta Gemini."""
         try:
             parts = msg.get("serverContent", {}).get("modelTurn", {}).get("parts", [])
             for part in parts:
@@ -190,20 +224,21 @@ class VoiceBridge:
         return None
 
     def _is_turn_complete(self, msg: dict) -> bool:
-        """Verifica se a resposta marca fim de turno."""
         return msg.get("serverContent", {}).get("turnComplete", False)
 
     async def shutdown(self) -> None:
-        """Encerra o bridge graciosamente."""
-        logger.info("[bridge] Encerrando...")
-
+        """Encerra conexões e estratégia."""
+        logger.info("[bridge] Encerrando Bridge...")
         if self._response_task:
             self._response_task.cancel()
-            try:
-                await self._response_task
-            except asyncio.CancelledError:
-                pass
 
         await self._strategy.shutdown()
-        await self._ws.stop()
+
+        # Fecha conexões WebSocket
+        for ws in list(self._connections):
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        self._connections.clear()
         logger.info("[bridge] Encerrado.")
