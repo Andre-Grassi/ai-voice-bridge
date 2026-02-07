@@ -44,7 +44,7 @@ app = FastAPI(
 )
 
 
-@app.get("/", tags=["Health"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["Health"])
 async def root() -> dict[str, str]:
     """Retorna mensagem de boas-vindas."""
     return {
@@ -60,7 +60,12 @@ async def favicon() -> Response:
     return Response(status_code=204)
 
 
-@app.get("/health", response_class=PlainTextResponse, tags=["Health"])
+@app.api_route(
+    "/health",
+    methods=["GET", "HEAD"],
+    response_class=PlainTextResponse,
+    tags=["Health"],
+)
 async def health_check() -> str:
     """Endpoint de health check para o Render/K8s."""
     return "OK"
