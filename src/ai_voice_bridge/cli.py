@@ -44,14 +44,14 @@ def main() -> None:
     """Ponto de entrada da CLI."""
     configure_logging()
 
-    print(f"Iniciando AI Voice Bridge (FastAPI/Uvicorn) na porta {settings.ws_port}...")
+    print(f"Iniciando AI Voice Bridge (FastAPI/Uvicorn) na porta {settings.port}...")
 
     # Executa o Uvicorn
     # reload=False em produção (pode ser True em dev se desejado, mas vamos manter simples)
     uvicorn.run(
         "ai_voice_bridge.main:app",
-        host=settings.ws_host,
-        port=settings.ws_port,
+        host=settings.host,
+        port=settings.port,
         log_level=settings.logging_level.lower(),
         ws_ping_interval=None,  # Deixa o app gerenciar pings se necessário
     )

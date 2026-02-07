@@ -34,9 +34,11 @@ class Settings(BaseSettings):
     input_sample_rate: int = 16000  # Cliente → Gemini
     output_sample_rate: int = 24000  # Gemini → Cliente
 
-    # WebSocket Server
-    ws_host: str = "0.0.0.0"
-    ws_port: int = 8765
+    # === WebSocket Server ===
+    # Host onde o servidor irá escutar (0.0.0.0 para expor na rede)
+    host: str = "0.0.0.0"
+    # Porta do servidor
+    port: int = 8765
 
     # History (On-Demand mode)
     max_history_messages: int = 20
