@@ -1,6 +1,6 @@
 # AI Voice Bridge
 
-Um gateway de voz modular e de baixa latência que conecta áudio em tempo real entre clientes (como Unreal Engine) e a API Gemini Live do Google.
+Um gateway de voz modular e de baixa latência que conecta áudio em tempo real entre clientes e a API Gemini Live do Google.
 
 ## Funcionalidades
 
